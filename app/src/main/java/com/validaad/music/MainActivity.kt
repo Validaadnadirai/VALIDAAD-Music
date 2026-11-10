@@ -184,7 +184,7 @@ private fun ValidaadMusicApp() {
                         controller = controller,
                         refresh = refresh
                     )
-                    1 -> YoutubeDiscoverScreen(onOpenLibrary = { selectedTab = 2 })
+                    1 -> YoutubeDiscoverScreen(onOpenLibrary = { selectedTab = 2 }, controller = controller)
 
                     2 -> LibraryScreen(
                         songs = songs, message = scanMessage,
