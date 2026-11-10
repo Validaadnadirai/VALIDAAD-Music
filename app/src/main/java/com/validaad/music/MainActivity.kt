@@ -73,6 +73,13 @@ private fun ValidaadMusicApp() {
     var scanMessage by remember { mutableStateOf("Allow access to find music on this device.") }
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
+    var libraryFilter by remember { mutableStateOf("All") }
+    var favoriteIds by remember { mutableStateOf(loadFavoriteIds(context)) }
+    var recentIds by remember { mutableStateOf(loadRecentIds(context)) }
+    var playlists by remember { mutableStateOf(loadPlaylists(context)) }
+    var showPlaylistDialog by remember { mutableStateOf(false) }
+    var playlistName by remember { mutableStateOf("") }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -180,12 +187,18 @@ private fun ValidaadMusicApp() {
                         Button(onClick = { selectedTab = 2 }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Open Library") }
                     }
                     2 -> LibraryScreen(
-                        songs = songs,
-                        message = scanMessage,
+                        songs = songs, message = scanMessage,
+                        query = searchQuery, onQueryChange = { searchQuery = it },
+                        filter = libraryFilter, onFilterChange = { libraryFilter = it },
+                        favoriteIds = favoriteIds, recentIds = recentIds, playlists = playlists,
+                        onCreatePlaylist = { showPlaylistDialog = true },
+                        onToggleFavorite = { song -> favoriteIds = toggleFavorite(context, favoriteIds, song.id) },
                         onRequestPermission = { permissionLauncher.launch(audioPermission()) },
-                        onPlay = { index -> playSongList(controller, songs, index) },
-                        controller = controller,
-                        refresh = refresh
+                        onPlay = { index ->
+                            recentIds = saveRecent(context, recentIds, songs[index].id)
+                            playSongList(controller, songs, index)
+                        },
+                        controller = controller, refresh = refresh
                     )
                     else -> {
                         Text("Settings", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
@@ -198,6 +211,19 @@ private fun ValidaadMusicApp() {
                 }
             }
         }
+    }
+    if (showPlaylistDialog) {
+        AlertDialog(
+            onDismissRequest = { showPlaylistDialog = false },
+            title = { Text("Create playlist") },
+            text = { OutlinedTextField(value = playlistName, onValueChange = { playlistName = it }, label = { Text("Playlist name") }, singleLine = true) },
+            confirmButton = { TextButton(onClick = {
+                val clean = playlistName.trim()
+                if (clean.isNotEmpty() && playlists.none { it.equals(clean, true) }) playlists = savePlaylist(context, playlists, clean)
+                playlistName = ""; showPlaylistDialog = false
+            }) { Text("Create") } },
+            dismissButton = { TextButton(onClick = { showPlaylistDialog = false }) { Text("Cancel") } }
+        )
     }
 }
 
@@ -292,16 +318,28 @@ private fun HomeScreen(
 
 @Composable
 private fun LibraryScreen(
-    songs: List<DeviceSong>,
-    message: String,
-    onRequestPermission: () -> Unit,
-    onPlay: (Int) -> Unit,
-    controller: MediaController?,
-    refresh: Int
+    songs: List<DeviceSong>, message: String,
+    query: String, onQueryChange: (String) -> Unit,
+    filter: String, onFilterChange: (String) -> Unit,
+    favoriteIds: Set<Long>, recentIds: List<Long>, playlists: List<String>,
+    onCreatePlaylist: () -> Unit, onToggleFavorite: (DeviceSong) -> Unit,
+    onRequestPermission: () -> Unit, onPlay: (Int) -> Unit,
+    controller: MediaController?, refresh: Int
 ) {
     Text("Your library", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
     Text(message, color = Muted, fontSize = 12.sp)
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(value = query, onValueChange = onQueryChange, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search songs or artists") }, leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }, singleLine = true)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf("All", "Favorites", "Recent").forEach { item -> FilterChip(selected = filter == item, onClick = { onFilterChange(item) }, label = { Text(item) }) }
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("PLAYLISTS (" + playlists.size + ")", color = Lime, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = onCreatePlaylist) { Text("+ Create", color = Lime) }
+    }
+    if (playlists.isNotEmpty()) Text(playlists.joinToString("  •  "), color = Muted, fontSize = 12.sp)
+    Spacer(Modifier.height(8.dp))
     if (songs.isEmpty()) {
         Surface(color = Panel, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -313,23 +351,26 @@ private fun LibraryScreen(
             }
         }
     } else {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
-            itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
-                Row(
-                    Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).clickable { onPlay(index) }.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(Modifier.size(42.dp).background(Color(0xFF293128), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.MusicNote, tint = Lime, contentDescription = null)
-                    }
-                    Spacer(Modifier.width(12.dp))
+        val visibleSongs = songs.withIndex().filter { item ->
+            val song = item.value
+            (query.isBlank() || song.title.contains(query, true) || song.artist.contains(query, true)) &&
+                when (filter) { "Favorites" -> song.id in favoriteIds; "Recent" -> song.id in recentIds; else -> true }
+        }.sortedBy { item -> if (filter == "Recent") recentIds.indexOf(item.value.id).let { if (it < 0) Int.MAX_VALUE else it } else item.index }
+        if (visibleSongs.isEmpty()) Text("No matching songs. Try another search or filter.", color = Muted)
+        else LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
+            itemsIndexed(visibleSongs, key = { _, item -> item.value.id }) { _, item ->
+                val song = item.value
+                Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).clickable { onPlay(item.index) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.MusicNote, tint = Lime, contentDescription = null, modifier = Modifier.size(34.dp))
+                    Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(song.title, color = Color.White, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(song.artist, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                    IconButton(onClick = { onToggleFavorite(song) }) {
+                        Icon(if (song.id in favoriteIds) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "Favorite", tint = if (song.id in favoriteIds) Lime else Muted)
+                    }
                     Text(formatTime(song.duration), color = Muted, fontSize = 11.sp)
-                    Spacer(Modifier.width(8.dp))
-                    Icon(Icons.Default.PlayArrow, tint = Lime, contentDescription = "Play")
                 }
             }
         }
