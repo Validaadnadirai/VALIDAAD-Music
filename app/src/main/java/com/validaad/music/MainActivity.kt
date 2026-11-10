@@ -1,10 +1,21 @@
 package com.validaad.music
 
+import android.Manifest
+import android.content.ContentUris
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -14,14 +25,35 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.util.Locale
 
 private val Ink = Color(0xFF090B0A)
 private val Panel = Color(0xFF171B18)
 private val Lime = Color(0xFFC8F169)
 private val Muted = Color(0xFF9AA39B)
+
+data class DeviceSong(
+    val id: Long,
+    val title: String,
+    val artist: String,
+    val uri: Uri,
+    val duration: Long
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,92 +64,317 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun ValidaadMusicApp() {
+    val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Home", "Search", "Library", "Settings")
-    val icons = listOf(Icons.Default.Home, Icons.Default.Search, Icons.Default.LibraryMusic, Icons.Default.Settings)
+    var songs by remember { mutableStateOf<List<DeviceSong>>(emptyList()) }
+    var permissionGranted by remember {
+        mutableStateOf(hasAudioPermission(context))
+    }
+    var scanMessage by remember { mutableStateOf("Allow access to find music on this device.") }
+    var controller by remember { mutableStateOf<MediaController?>(null) }
+    var refresh by remember { mutableIntStateOf(0) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        permissionGranted = granted
+        scanMessage = if (granted) "Scanning your music…" else "Music permission was not granted."
+    }
+
+    val sessionToken = remember {
+        SessionToken(context, android.content.ComponentName(context, MusicPlaybackService::class.java))
+    }
+    val controllerFuture = remember {
+        MediaController.Builder(context, sessionToken).buildAsync()
+    }
+    DisposableEffect(controllerFuture) {
+        controllerFuture.addListener({
+            try { controller = controllerFuture.get() } catch (_: Exception) { scanMessage = "Player could not start." }
+        }, ContextCompat.getMainExecutor(context))
+        onDispose {
+            MediaController.releaseFuture(controllerFuture)
+        }
+    }
+
+    LaunchedEffect(permissionGranted) {
+        if (permissionGranted) {
+            scanMessage = "Scanning your music…"
+            songs = withContext(Dispatchers.IO) { loadDeviceSongs(context) }
+            scanMessage = if (songs.isEmpty()) "No audio files found. Add music to your phone and scan again." else "${songs.size} songs found on this device."
+        }
+    }
+
+    LaunchedEffect(controller) {
+        while (true) {
+            refresh++
+            delay(700)
+        }
+    }
+
+    DisposableEffect(controller) {
+        val activeController = controller
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) { refresh++ }
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { refresh++ }
+            override fun onPlaybackStateChanged(playbackState: Int) { refresh++ }
+        }
+        activeController?.addListener(listener)
+        onDispose { activeController?.removeListener(listener) }
+    }
+
     MaterialTheme {
         Scaffold(
             containerColor = Ink,
             bottomBar = {
                 NavigationBar(containerColor = Panel) {
-                    tabs.forEachIndexed { index, label ->
+                    listOf("Home", "Search", "Library", "Settings").forEachIndexed { index, label ->
+                        val icon = when (index) {
+                            0 -> Icons.Default.Home
+                            1 -> Icons.Default.Search
+                            2 -> Icons.Default.LibraryMusic
+                            else -> Icons.Default.Settings
+                        }
                         NavigationBarItem(
                             selected = selectedTab == index,
                             onClick = { selectedTab = index },
-                            icon = { Icon(icons[index], contentDescription = label) },
-                            label = { Text(label) }
+                            icon = { Icon(icon, contentDescription = label) },
+                            label = { Text(label) },
+                            colors = NavigationBarItemDefaults.colors(selectedIconColor = Lime, indicatorColor = Color(0xFF303A2B))
                         )
                     }
                 }
             }
         ) { padding ->
             Column(
-                modifier = Modifier.fillMaxSize().background(Ink).padding(padding).padding(horizontal = 22.dp, vertical = 18.dp)
+                modifier = Modifier.fillMaxSize().background(Ink).padding(padding).padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Column {
                         Text("VALIDAAD", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
                         Text("MUSIC", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
                     }
-                    Box(Modifier.size(44.dp).background(Panel, CircleShape), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Album, contentDescription = "Vinyl", tint = Lime, modifier = Modifier.size(27.dp))
-                    }
+                    Icon(Icons.Default.Album, contentDescription = "Vinyl", tint = Lime, modifier = Modifier.size(34.dp))
                 }
-                Spacer(Modifier.height(30.dp))
+                Spacer(Modifier.height(20.dp))
                 when (selectedTab) {
-                    0 -> HomeScreen()
-                    1 -> SimpleScreen("Find your sound", "Search for music, artists and albums.")
-                    2 -> SimpleScreen("Your library", "Your offline songs and playlists will live here.")
-                    else -> SimpleScreen("Settings", "Playback, appearance and privacy controls.")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HomeScreen() {
-    Text("YOUR MUSIC. YOUR WORLD.", color = Muted, fontSize = 11.sp, letterSpacing = 2.sp)
-    Spacer(Modifier.height(8.dp))
-    Text("Feel every beat.", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-    Spacer(Modifier.height(22.dp))
-    Surface(color = Panel, shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(20.dp)) {
-            Text("THE VALIDAAD EXPERIENCE", color = Lime, fontSize = 10.sp, letterSpacing = 1.5.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(14.dp))
-            Box(Modifier.fillMaxWidth().height(170.dp), contentAlignment = Alignment.Center) {
-                Box(Modifier.size(150.dp).background(Color(0xFF252B27), CircleShape), contentAlignment = Alignment.Center) {
-                    Box(Modifier.size(116.dp).background(Color(0xFF111512), CircleShape), contentAlignment = Alignment.Center) {
-                        Box(Modifier.size(38.dp).background(Lime, CircleShape))
+                    0 -> HomeScreen(
+                        songCount = songs.size,
+                        message = scanMessage,
+                        onScan = {
+                            if (permissionGranted) {
+                                songs = emptyList()
+                                scanMessage = "Scanning your music…"
+                            } else {
+                                permissionLauncher.launch(audioPermission())
+                            }
+                        },
+                        onOpenLibrary = { selectedTab = 2 },
+                        controller = controller,
+                        refresh = refresh
+                    )
+                    1 -> {
+                        Text("Find your music", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(12.dp))
+                        Text("Your device songs are available in Library.", color = Muted)
+                        Spacer(Modifier.height(12.dp))
+                        Button(onClick = { selectedTab = 2 }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Open Library") }
+                    }
+                    2 -> LibraryScreen(
+                        songs = songs,
+                        message = scanMessage,
+                        onRequestPermission = { permissionLauncher.launch(audioPermission()) },
+                        onPlay = { index -> playSongList(controller, songs, index) },
+                        controller = controller,
+                        refresh = refresh
+                    )
+                    else -> {
+                        Text("Settings", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(8.dp))
+                        Text("VALIDAAD MUSIC • Offline player foundation", color = Muted)
+                        Spacer(Modifier.height(16.dp))
+                        Text("Music access: ${if (permissionGranted) "Allowed" else "Not allowed"}", color = Lime)
+                        Text("Your local audio stays on your device.", color = Muted, fontSize = 13.sp)
                     }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            Text("Your signature player is coming", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Text("A fresh home for the music you love.", color = Muted, fontSize = 13.sp)
         }
     }
-    Spacer(Modifier.height(24.dp))
-    Text("EXPLORE", color = Lime, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+}
+
+private fun hasAudioPermission(context: android.content.Context): Boolean =
+    ContextCompat.checkSelfPermission(context, audioPermission()) == PackageManager.PERMISSION_GRANTED
+
+private fun audioPermission(): String =
+    if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
+
+private fun loadDeviceSongs(context: android.content.Context): List<DeviceSong> {
+    val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+    val projection = arrayOf(
+        MediaStore.Audio.Media._ID,
+        MediaStore.Audio.Media.TITLE,
+        MediaStore.Audio.Media.ARTIST,
+        MediaStore.Audio.Media.DURATION,
+        MediaStore.Audio.Media.IS_MUSIC
+    )
+    val result = mutableListOf<DeviceSong>()
+    context.contentResolver.query(
+        collection, projection, "${MediaStore.Audio.Media.IS_MUSIC} != 0", null,
+        "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
+    )?.use { cursor ->
+        val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+        val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+        val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+        val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+        while (cursor.moveToNext()) {
+            val id = cursor.getLong(idCol)
+            val title = cursor.getString(titleCol) ?: "Unknown title"
+            val artist = cursor.getString(artistCol) ?: "Unknown artist"
+            val duration = cursor.getLong(durationCol)
+            result += DeviceSong(id, title, artist, ContentUris.withAppendedId(collection, id), duration)
+        }
+    }
+    return result
+}
+
+private fun playSongList(controller: MediaController?, songs: List<DeviceSong>, startIndex: Int) {
+    if (controller == null || songs.isEmpty()) return
+    val mediaItems = songs.map { song ->
+        MediaItem.Builder()
+            .setMediaId(song.id.toString())
+            .setUri(song.uri)
+            .setMediaMetadata(
+                MediaMetadata.Builder().setTitle(song.title).setArtist(song.artist).build()
+            )
+            .build()
+    }
+    controller.setMediaItems(mediaItems, startIndex, 0L)
+    controller.prepare()
+    controller.play()
+}
+
+@Composable
+private fun HomeScreen(
+    songCount: Int,
+    message: String,
+    onScan: () -> Unit,
+    onOpenLibrary: () -> Unit,
+    controller: MediaController?,
+    refresh: Int
+) {
+    Text("YOUR MUSIC. YOUR WORLD.", color = Muted, fontSize = 11.sp, letterSpacing = 2.sp)
+    Spacer(Modifier.height(7.dp))
+    Text("Feel every beat.", color = Color.White, fontSize = 29.sp, fontWeight = FontWeight.Bold)
+    Spacer(Modifier.height(18.dp))
+    Surface(color = Panel, shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp)) {
+            Text("OFFLINE MUSIC", color = Lime, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.LibraryMusic, tint = Lime, modifier = Modifier.size(38.dp), contentDescription = null)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("$songCount songs found", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+                    Text(message, color = Muted, fontSize = 12.sp)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Button(onClick = onScan, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) {
+                Icon(Icons.Default.FolderOpen, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (songCount > 0) "Scan again" else "Scan phone music")
+            }
+            TextButton(onClick = onOpenLibrary, modifier = Modifier.align(Alignment.End)) { Text("Open library", color = Lime) }
+        }
+    }
+    Spacer(Modifier.height(18.dp))
+    NowPlayingCard(controller, refresh)
+}
+
+@Composable
+private fun LibraryScreen(
+    songs: List<DeviceSong>,
+    message: String,
+    onRequestPermission: () -> Unit,
+    onPlay: (Int) -> Unit,
+    controller: MediaController?,
+    refresh: Int
+) {
+    Text("Your library", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+    Text(message, color = Muted, fontSize = 12.sp)
     Spacer(Modifier.height(12.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        ExploreTile("Offline music", "On your device", Modifier.weight(1f))
-        ExploreTile("Discover", "Find new sounds", Modifier.weight(1f))
+    if (songs.isEmpty()) {
+        Surface(color = Panel, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.MusicNote, tint = Lime, modifier = Modifier.size(38.dp), contentDescription = null)
+                Text("No songs to show", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text("Allow music access or scan your phone.", color = Muted, fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = onRequestPermission, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Allow / Scan") }
+            }
+        }
+    } else {
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
+            itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
+                Row(
+                    Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp)).clickable { onPlay(index) }.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(Modifier.size(42.dp).background(Color(0xFF293128), RoundedCornerShape(10.dp)), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.MusicNote, tint = Lime, contentDescription = null)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(song.title, color = Color.White, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(song.artist, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Text(formatTime(song.duration), color = Muted, fontSize = 11.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Default.PlayArrow, tint = Lime, contentDescription = "Play")
+                }
+            }
+        }
     }
+    NowPlayingCard(controller, refresh)
 }
 
 @Composable
-private fun ExploreTile(title: String, subtitle: String, modifier: Modifier = Modifier) {
-    Column(modifier.background(Panel, RoundedCornerShape(18.dp)).padding(15.dp)) {
-        Text(title, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-        Spacer(Modifier.height(5.dp))
-        Text(subtitle, color = Muted, fontSize = 11.sp)
+private fun NowPlayingCard(controller: MediaController?, refresh: Int) {
+    val title = controller?.currentMediaItem?.mediaMetadata?.title?.toString() ?: "Nothing playing"
+    val artist = controller?.currentMediaItem?.mediaMetadata?.artist?.toString() ?: "Choose a song from Library"
+    val duration = (controller?.duration ?: 0L).coerceAtLeast(0L)
+    val position = (controller?.currentPosition ?: 0L).coerceAtLeast(0L)
+    val isPlaying = controller?.isPlaying == true
+    Surface(color = Panel, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text("NOW PLAYING", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            Spacer(Modifier.height(5.dp))
+            Text(title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(artist, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Slider(
+                value = if (duration > 0) position.coerceAtMost(duration).toFloat() else 0f,
+                onValueChange = { controller?.seekTo(it.toLong()) },
+                valueRange = 0f..(duration.coerceAtLeast(1L).toFloat()),
+                enabled = duration > 0,
+                colors = SliderDefaults.colors(thumbColor = Lime, activeTrackColor = Lime)
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(formatTime(position), color = Muted, fontSize = 10.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { controller?.seekToPreviousMediaItem() }) { Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = Color.White) }
+                    IconButton(onClick = {
+                        if (isPlaying) controller?.pause() else controller?.play()
+                    }) {
+                        Icon(if (isPlaying) Icons.Default.PauseCircleFilled else Icons.Default.PlayCircleFilled, contentDescription = "Play pause", tint = Lime, modifier = Modifier.size(42.dp))
+                    }
+                    IconButton(onClick = { controller?.seekToNextMediaItem() }) { Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = Color.White) }
+                }
+                Text(formatTime(duration), color = Muted, fontSize = 10.sp)
+            }
+        }
     }
 }
 
-@Composable
-private fun SimpleScreen(title: String, subtitle: String) {
-    Text(title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-    Spacer(Modifier.height(8.dp))
-    Text(subtitle, color = Muted, fontSize = 14.sp)
+private fun formatTime(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    return String.format(Locale.getDefault(), "%d:%02d", total / 60, total % 60)
 }
