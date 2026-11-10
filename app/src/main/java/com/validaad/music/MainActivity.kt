@@ -184,42 +184,8 @@ private fun ValidaadMusicApp() {
                         controller = controller,
                         refresh = refresh
                     )
-                    1 -> {
-                        Text("Discover music", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
-                        Text("Search songs on YouTube", color = Muted, fontSize = 13.sp)
-                        Spacer(Modifier.height(16.dp))
-                        OutlinedTextField(
-                            value = youtubeQuery,
-                            onValueChange = { youtubeQuery = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("Song, artist or album") },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                            singleLine = true
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        Button(
-                            onClick = {
-                                val query = youtubeQuery.trim()
-                                if (query.isNotEmpty()) {
-                                    val url = Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query))
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, url))
-                                }
-                            },
-                            enabled = youtubeQuery.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)
-                        ) {
-                            Icon(Icons.Default.PlayCircle, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Search on YouTube")
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Text("YouTube opens its official app or website for search and playback. VALIDAAD MUSIC does not extract or download YouTube audio.", color = Muted, fontSize = 12.sp)
-                        Spacer(Modifier.height(20.dp))
-                        OutlinedButton(onClick = { selectedTab = 2 }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Search local music in Library", color = Lime)
-                        }
-                    }
+                    1 -> YoutubeDiscoverScreen(onOpenLibrary = { selectedTab = 2 })
+
                     2 -> LibraryScreen(
                         songs = songs, message = scanMessage,
                         query = searchQuery, onQueryChange = { searchQuery = it },
