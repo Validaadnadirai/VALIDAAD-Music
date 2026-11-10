@@ -12,7 +12,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-        buildConfigField("String", "YOUTUBE_API_KEY", "\"${System.getenv(\"YOUTUBE_API_KEY\") ?: \"\"}\"")
+        buildConfigField("String", "YOUTUBE_API_KEY", "\"${System.getenv("YOUTUBE_API_KEY") ?: ""}\"")
     }
     buildFeatures {
         compose = true
