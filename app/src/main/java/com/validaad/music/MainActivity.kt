@@ -1,6 +1,7 @@
 package com.validaad.music
 
 import android.Manifest
+import android.content.Intent
 import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -74,6 +75,7 @@ private fun ValidaadMusicApp() {
     var controller by remember { mutableStateOf<MediaController?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
+    var youtubeQuery by remember { mutableStateOf("") }
     var libraryFilter by remember { mutableStateOf("All") }
     var favoriteIds by remember { mutableStateOf(loadFavoriteIds(context)) }
     var recentIds by remember { mutableStateOf(loadRecentIds(context)) }
@@ -183,11 +185,40 @@ private fun ValidaadMusicApp() {
                         refresh = refresh
                     )
                     1 -> {
-                        Text("Find your music", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                        Text("Discover music", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                        Text("Search songs on YouTube", color = Muted, fontSize = 13.sp)
+                        Spacer(Modifier.height(16.dp))
+                        OutlinedTextField(
+                            value = youtubeQuery,
+                            onValueChange = { youtubeQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Song, artist or album") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                            singleLine = true
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Button(
+                            onClick = {
+                                val query = youtubeQuery.trim()
+                                if (query.isNotEmpty()) {
+                                    val url = Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query))
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, url))
+                                }
+                            },
+                            enabled = youtubeQuery.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)
+                        ) {
+                            Icon(Icons.Default.PlayCircle, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Search on YouTube")
+                        }
                         Spacer(Modifier.height(12.dp))
-                        Text("Your device songs are available in Library.", color = Muted)
-                        Spacer(Modifier.height(12.dp))
-                        Button(onClick = { selectedTab = 2 }, colors = ButtonDefaults.buttonColors(containerColor = Lime, contentColor = Ink)) { Text("Open Library") }
+                        Text("YouTube opens its official app or website for search and playback. VALIDAAD MUSIC does not extract or download YouTube audio.", color = Muted, fontSize = 12.sp)
+                        Spacer(Modifier.height(20.dp))
+                        OutlinedButton(onClick = { selectedTab = 2 }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Search local music in Library", color = Lime)
+                        }
                     }
                     2 -> LibraryScreen(
                         songs = songs, message = scanMessage,
