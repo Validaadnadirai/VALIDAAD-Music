@@ -78,6 +78,9 @@ private fun ValidaadMusicApp() {
     var favoriteIds by remember { mutableStateOf(loadFavoriteIds(context)) }
     var recentIds by remember { mutableStateOf(loadRecentIds(context)) }
     var playlists by remember { mutableStateOf(loadPlaylists(context)) }
+    var playlistSongs by remember { mutableStateOf(loadPlaylistSongs(context)) }
+    var selectedPlaylist by remember { mutableStateOf<String?>(null) }
+    var showAddSongsDialog by remember { mutableStateOf(false) }
     var showPlaylistDialog by remember { mutableStateOf(false) }
     var playlistName by remember { mutableStateOf("") }
 
@@ -191,6 +194,10 @@ private fun ValidaadMusicApp() {
                         query = searchQuery, onQueryChange = { searchQuery = it },
                         filter = libraryFilter, onFilterChange = { libraryFilter = it },
                         favoriteIds = favoriteIds, recentIds = recentIds, playlists = playlists,
+                        playlistSongs = playlistSongs, selectedPlaylist = selectedPlaylist,
+                        onSelectPlaylist = { selectedPlaylist = it },
+                        onAddSongs = { showAddSongsDialog = true },
+                        onRemovePlaylistSong = { id -> selectedPlaylist?.let { name -> playlistSongs = togglePlaylistSong(context, playlistSongs, name, id) } },
                         onCreatePlaylist = { showPlaylistDialog = true },
                         onToggleFavorite = { song -> favoriteIds = toggleFavorite(context, favoriteIds, song.id) },
                         onRequestPermission = { permissionLauncher.launch(audioPermission()) },
@@ -211,6 +218,30 @@ private fun ValidaadMusicApp() {
                 }
             }
         }
+    }
+    if (showAddSongsDialog && selectedPlaylist != null) {
+        val target = selectedPlaylist!!
+        AlertDialog(
+            onDismissRequest = { showAddSongsDialog = false },
+            title = { Text("Add songs to $target") },
+            text = {
+                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                    itemsIndexed(songs, key = { _, song -> song.id }) { _, song ->
+                        val included = song.id in (playlistSongs[target] ?: emptySet())
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(song.artist, color = Muted, fontSize = 11.sp)
+                            }
+                            TextButton(onClick = {
+                                playlistSongs = togglePlaylistSong(context, playlistSongs, target, song.id)
+                            }) { Text(if (included) "Remove" else "Add", color = Lime) }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showAddSongsDialog = false }) { Text("Done") } }
+        )
     }
     if (showPlaylistDialog) {
         AlertDialog(
@@ -322,6 +353,9 @@ private fun LibraryScreen(
     query: String, onQueryChange: (String) -> Unit,
     filter: String, onFilterChange: (String) -> Unit,
     favoriteIds: Set<Long>, recentIds: List<Long>, playlists: List<String>,
+    playlistSongs: Map<String, Set<Long>>, selectedPlaylist: String?,
+    onSelectPlaylist: (String?) -> Unit, onAddSongs: () -> Unit,
+    onRemovePlaylistSong: (Long) -> Unit,
     onCreatePlaylist: () -> Unit, onToggleFavorite: (DeviceSong) -> Unit,
     onRequestPermission: () -> Unit, onPlay: (Int) -> Unit,
     controller: MediaController?, refresh: Int
@@ -338,7 +372,32 @@ private fun LibraryScreen(
         Spacer(Modifier.weight(1f))
         TextButton(onClick = onCreatePlaylist) { Text("+ Create", color = Lime) }
     }
-    if (playlists.isNotEmpty()) Text(playlists.joinToString("  •  "), color = Muted, fontSize = 12.sp)
+    if (playlists.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            playlists.forEach { name ->
+                TextButton(onClick = { onSelectPlaylist(if (selectedPlaylist == name) null else name) }) {
+                    Text("${if (selectedPlaylist == name) "▾" else "▸"} $name  (${playlistSongs[name]?.size ?: 0})", color = if (selectedPlaylist == name) Lime else Color.White)
+                }
+            }
+        }
+    }
+    if (selectedPlaylist != null) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(selectedPlaylist, color = Lime, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onAddSongs) { Text("+ Add songs", color = Lime) }
+        }
+        val memberSongs = songs.filter { it.id in (playlistSongs[selectedPlaylist] ?: emptySet()) }
+        if (memberSongs.isEmpty()) Text("No songs in this playlist yet.", color = Muted, fontSize = 12.sp)
+        memberSongs.forEach { member ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(member.title, color = Color.White, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                IconButton(onClick = { onRemovePlaylistSong(member.id) }) {
+                    Icon(Icons.Default.RemoveCircleOutline, contentDescription = "Remove from playlist", tint = Muted)
+                }
+            }
+        }
+    }
     Spacer(Modifier.height(8.dp))
     if (songs.isEmpty()) {
         Surface(color = Panel, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
