@@ -30,3 +30,29 @@ fun savePlaylist(c: Context, current: List<String>, name: String): List<String> 
     result.forEach { a.put(it) }; prefs(c).edit().putString("playlists", a.toString()).apply()
     return result
 }
+
+fun loadPlaylistSongs(c: Context): Map<String, Set<Long>> {
+    val obj = org.json.JSONObject(prefs(c).getString("playlist_songs", "{}") ?: "{}")
+    return buildMap {
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val name = keys.next()
+            val arr = obj.optJSONArray(name) ?: JSONArray()
+            put(name, buildSet { for (i in 0 until arr.length()) add(arr.optLong(i)) })
+        }
+    }
+}
+fun togglePlaylistSong(c: Context, current: Map<String, Set<Long>>, playlist: String, songId: Long): Map<String, Set<Long>> {
+    val updated = current.toMutableMap()
+    val ids = (current[playlist] ?: emptySet()).toMutableSet()
+    if (!ids.add(songId)) ids.remove(songId)
+    updated[playlist] = ids
+    val obj = org.json.JSONObject()
+    updated.forEach { (name, values) ->
+        val arr = JSONArray()
+        values.forEach { arr.put(it) }
+        obj.put(name, arr)
+    }
+    prefs(c).edit().putString("playlist_songs", obj.toString()).apply()
+    return updated
+}
