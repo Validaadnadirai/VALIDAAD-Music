@@ -67,6 +67,8 @@ class MainActivity : ComponentActivity() {
 private fun ValidaadMusicApp() {
     val context = LocalContext.current
     var selectedTab by remember { mutableIntStateOf(0) }
+    var showFullPlayer by remember { mutableStateOf(false) }
+    var librarySort by remember { mutableStateOf("Title") }
     var songs by remember { mutableStateOf<List<DeviceSong>>(emptyList()) }
     var permissionGranted by remember {
         mutableStateOf(hasAudioPermission(context))
@@ -160,15 +162,19 @@ private fun ValidaadMusicApp() {
             Column(
                 modifier = Modifier.fillMaxSize().background(Ink).padding(padding).padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column {
-                        Text("VALIDAAD", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-                        Text("MUSIC", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                if (!showFullPlayer) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column {
+                            Text("VALIDAAD", color = Lime, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
+                            Text("MUSIC", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                        }
+                        Icon(Icons.Default.Album, contentDescription = "Vinyl", tint = Lime, modifier = Modifier.size(34.dp))
                     }
-                    Icon(Icons.Default.Album, contentDescription = "Vinyl", tint = Lime, modifier = Modifier.size(34.dp))
+                    Spacer(Modifier.height(20.dp))
                 }
-                Spacer(Modifier.height(20.dp))
-                when (selectedTab) {
+                if (showFullPlayer) {
+                    FullPlayerScreen(controller = controller, refresh = refresh, onBack = { showFullPlayer = false })
+                } else when (selectedTab) {
                     0 -> HomeScreen(
                         songCount = songs.size,
                         message = scanMessage,
@@ -182,7 +188,8 @@ private fun ValidaadMusicApp() {
                         },
                         onOpenLibrary = { selectedTab = 2 },
                         controller = controller,
-                        refresh = refresh
+                        refresh = refresh,
+                        onOpenPlayer = { showFullPlayer = true }
                     )
                     1 -> YoutubeDiscoverScreen(onOpenLibrary = { selectedTab = 2 }, controller = controller)
 
@@ -202,7 +209,9 @@ private fun ValidaadMusicApp() {
                             recentIds = saveRecent(context, recentIds, songs[index].id)
                             playSongList(controller, songs, index)
                         },
-                        controller = controller, refresh = refresh
+                        controller = controller, refresh = refresh,
+                        sort = librarySort, onSortChange = { librarySort = it },
+                        onOpenPlayer = { showFullPlayer = true }
                     )
                     else -> {
                         Text("Settings", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
@@ -313,7 +322,8 @@ private fun HomeScreen(
     onScan: () -> Unit,
     onOpenLibrary: () -> Unit,
     controller: MediaController?,
-    refresh: Int
+    refresh: Int,
+    onOpenPlayer: () -> Unit
 ) {
     Text("YOUR MUSIC. YOUR WORLD.", color = Muted, fontSize = 11.sp, letterSpacing = 2.sp)
     Spacer(Modifier.height(7.dp))
@@ -341,7 +351,7 @@ private fun HomeScreen(
         }
     }
     Spacer(Modifier.height(18.dp))
-    NowPlayingCard(controller, refresh)
+    NowPlayingCard(controller, refresh, onOpenPlayer)
 }
 
 @Composable
@@ -355,7 +365,9 @@ private fun LibraryScreen(
     onRemovePlaylistSong: (Long) -> Unit,
     onCreatePlaylist: () -> Unit, onToggleFavorite: (DeviceSong) -> Unit,
     onRequestPermission: () -> Unit, onPlay: (Int) -> Unit,
-    controller: MediaController?, refresh: Int
+    controller: MediaController?, refresh: Int,
+    sort: String, onSortChange: (String) -> Unit,
+    onOpenPlayer: () -> Unit
 ) {
     Text("Your library", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
     Text(message, color = Muted, fontSize = 12.sp)
@@ -363,6 +375,19 @@ private fun LibraryScreen(
     OutlinedTextField(value = query, onValueChange = onQueryChange, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search songs or artists") }, leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }, singleLine = true)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf("All", "Favorites", "Recent").forEach { item -> FilterChip(selected = filter == item, onClick = { onFilterChange(item) }, label = { Text(item) }) }
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("${songs.size} songs  •  ${favoriteIds.size} favorites  •  ${playlists.size} playlists", color = Muted, fontSize = 10.sp)
+        Spacer(Modifier.weight(1f))
+        var sortMenu by remember { mutableStateOf(false) }
+        Box {
+            TextButton(onClick = { sortMenu = true }) { Text("Sort: $sort", color = Lime, fontSize = 11.sp) }
+            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                listOf("Title", "Artist", "Duration").forEach { option ->
+                    DropdownMenuItem(text = { Text(option) }, onClick = { onSortChange(option); sortMenu = false })
+                }
+            }
+        }
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text("PLAYLISTS (" + playlists.size + ")", color = Lime, fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -411,7 +436,16 @@ private fun LibraryScreen(
             val song = item.value
             (query.isBlank() || song.title.contains(query, true) || song.artist.contains(query, true)) &&
                 when (filter) { "Favorites" -> song.id in favoriteIds; "Recent" -> song.id in recentIds; else -> true }
-        }.sortedBy { item -> if (filter == "Recent") recentIds.indexOf(item.value.id).let { if (it < 0) Int.MAX_VALUE else it } else item.index }
+        }.sortedWith { a, b ->
+            when (filter) {
+                "Recent" -> recentIds.indexOf(a.value.id).compareTo(recentIds.indexOf(b.value.id))
+                else -> when (sort) {
+                    "Artist" -> a.value.artist.compareTo(b.value.artist, ignoreCase = true)
+                    "Duration" -> a.value.duration.compareTo(b.value.duration)
+                    else -> a.value.title.compareTo(b.value.title, ignoreCase = true)
+                }
+            }
+        }
         if (visibleSongs.isEmpty()) Text("No matching songs. Try another search or filter.", color = Muted)
         else LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
             itemsIndexed(visibleSongs, key = { _, item -> item.value.id }) { _, item ->
@@ -431,19 +465,19 @@ private fun LibraryScreen(
             }
         }
     }
-    NowPlayingCard(controller, refresh)
+    NowPlayingCard(controller, refresh, onOpenPlayer)
 }
 
 @Composable
-private fun NowPlayingCard(controller: MediaController?, refresh: Int) {
+private fun NowPlayingCard(controller: MediaController?, refresh: Int, onOpenPlayer: () -> Unit) {
     val title = controller?.currentMediaItem?.mediaMetadata?.title?.toString() ?: "Nothing playing"
     val artist = controller?.currentMediaItem?.mediaMetadata?.artist?.toString() ?: "Choose a song from Library"
     val duration = (controller?.duration ?: 0L).coerceAtLeast(0L)
     val position = (controller?.currentPosition ?: 0L).coerceAtLeast(0L)
     val isPlaying = controller?.isPlaying == true
-    Surface(color = Panel, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(color = Panel, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth().clickable(enabled = controller?.currentMediaItem != null, onClick = onOpenPlayer)) {
         Column(Modifier.padding(14.dp)) {
-            Text("NOW PLAYING", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+            Text("NOW PLAYING  •  TAP TO OPEN PLAYER", color = Lime, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
             Spacer(Modifier.height(5.dp))
             Text(title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(artist, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
